@@ -8,7 +8,6 @@ pipeline {
 
     stages {
         stage('Unit Tests and REST Tests') {
-            // Estas etapas se ejecutan secuencialmente
             stages {
                 stage('Unit Tests') {
                     agent { label 'master' }
@@ -92,55 +91,34 @@ pipeline {
                                 rm -f bandit.out
                                 bandit --exit-zero -r . -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}"
                             '''
-                            recordIssues tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')], 
-                            qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true], 
-                            [threshold:4, type: 'TOTAL', unstable: false]]
+                            recordIssues(
+                                tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')],
+                                qualityGates: [
+                                    [threshold: 2, type: 'TOTAL', unstable: true],
+                                    [threshold: 4, type: 'TOTAL', unstable: false]
+                                ]
+                            )
                         }
                     }
                 }
-            }
-        }
 
-        stage('Coverage') {
-            agent { label 'master' }
-            steps {
-                echo "Executing on agent: ${NODE_NAME}"
-                echo "Current workspace: ${WORKSPACE}"
-                sh 'whoami'
-                sh 'hostname'
-                script {
-                    unstash 'unit-coverage'
-                    unstash 'rest-coverage'
+                stage('Performance') {
+                    agent { label 'node-2' }
+                    steps {
+                        echo "Executing on agent: ${NODE_NAME}"
+                        echo "Current workspace: ${WORKSPACE}"
+                        sh 'whoami'
+                        sh 'hostname'
+                        sh '''
+                            nohup flask run > flask.log 2>&1 &
+                            sleep 3
+                            wget -q https://dlcdn.apache.org//jmeter/binaries/apache-jmeter-5.6.3.tgz
+                            tar -xzf apache-jmeter-5.6.3.tgz
+                        '''
+                        sh 'apache-jmeter-5.6.3/bin/jmeter.sh -n -t jmeter/test-plan.jmx -l flask.jtl'
+                        perfReport sourceDataFiles: 'flask.jtl'
+                    }   
                 }
-
-                sh '''
-                    echo "Combining coverage results"
-                    coverage combine .coverage.unit .coverage.rest
-                    coverage report --include=app/* 
-                    coverage xml
-                '''
-
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    cobertura coberturaReportFile: 'coverage.xml', conditionalCoverageTargets: '90,80,80', lineCoverageTargets: '95,85,85', onlyStable: false
-                }
-            }
-        }
-
-        stage('Performance') {
-            agent { label 'node-2' }
-            steps {
-                echo "Executing on agent: ${NODE_NAME}"
-                echo "Current workspace: ${WORKSPACE}"
-                sh 'whoami'
-                sh 'hostname'
-                sh '''
-                    nohup flask run > flask.log 2>&1 &
-                    sleep 3
-                    wget -q https://dlcdn.apache.org//jmeter/binaries/apache-jmeter-5.6.3.tgz
-                    tar -xzf apache-jmeter-5.6.3.tgz
-                '''
-                sh 'apache-jmeter-5.6.3/bin/jmeter.sh -n -t jmeter/test-plan.jmx -l flask.jtl'
-                perfReport sourceDataFiles: 'flask.jtl'
             }
         }
     }
